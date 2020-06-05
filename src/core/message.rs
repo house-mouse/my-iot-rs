@@ -1,6 +1,7 @@
 //! Describes a sensor reading and related structures.
 
 use crate::prelude::*;
+use tokio::sync::broadcast::RecvError;
 
 /// Services use messages to exchange sensor readings between each other.
 /// Message contains a single sensor reading alongside with some metadata.
@@ -78,5 +79,24 @@ impl Message {
     pub fn timestamp<T: Into<DateTime<Local>>>(mut self, timestamp: T) -> Self {
         self.reading.timestamp = timestamp.into();
         self
+    }
+
+    pub fn send_to(self, tx: &Sender) -> usize {
+        tx.send(self).expect("Failed to send the message")
+    }
+
+    /// Receive a message from the receiver, transparently handling all the errors.
+    pub async fn receive_from(rx: &mut Receiver) -> Message {
+        loop {
+            match rx.recv().await {
+                Ok(message) => {
+                    break message;
+                }
+                Err(error) => match error {
+                    RecvError::Lagged(message_number) => error!("lagged {} messages", message_number),
+                    RecvError::Closed => unreachable!(),
+                },
+            }
+        }
     }
 }

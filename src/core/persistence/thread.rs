@@ -1,24 +1,20 @@
 use crate::prelude::*;
 
-/// Spawn the persistence thread.
-pub fn spawn(scope: &Scope, db: Arc<Mutex<Connection>>, bus: &mut Bus) -> Result<()> {
+/// Spawn the persistence task.
+pub fn spawn(db: Arc<Mutex<Connection>>, mut rx: Receiver) {
     info!("Spawning readings persistence…");
-    let rx = bus.add_rx();
 
-    supervisor::spawn(scope, "system::persistence", bus.add_tx(), move || {
-        for message in &rx {
-            if let Err(error) = process_message(&message, &db) {
+    tokio::spawn(async move {
+        loop {
+            let message = Message::receive_from(&mut rx).await;
+            if let Err(error) = upsert_message(&message, &db) {
                 error!("{}: {:?}", error, &message);
             }
         }
-        unreachable!();
-    })?;
-
-    Ok(())
+    });
 }
 
-/// Process a message.
-fn process_message(message: &Message, db: &Arc<Mutex<Connection>>) -> Result<()> {
+fn upsert_message(message: &Message, db: &Arc<Mutex<Connection>>) -> Result<()> {
     info!(
         "{}: {:?} {:?}",
         &message.sensor.id, &message.type_, &message.reading.value

@@ -1,9 +1,8 @@
 //! [tado°](https://www.tado.com/) API.
 
 use crate::prelude::*;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use reqwest::Url;
-use std::thread;
 use std::time::{Duration, SystemTime};
 
 const CLIENT_ID: &str = "public-api-preview";
@@ -23,19 +22,20 @@ pub struct Secrets {
 }
 
 impl Tado {
-    pub fn spawn<'env>(&'env self, scope: &Scope<'env>, service_id: &'env str, bus: &mut Bus) -> Result<()> {
-        let client = client_builder().build()?;
+    pub fn spawn(self, _service_id: String, _tx: Sender) -> Result<()> {
+        let _client = async_client_builder().build()?;
 
-        self.login(&client).unwrap();
-
-        supervisor::spawn(scope, service_id, bus.add_tx(), move || -> Result<()> {
+        tokio::spawn(async move {
             loop {
-                thread::sleep(REFRESH_PERIOD);
+                tokio::time::delay_for(REFRESH_PERIOD).await;
             }
-        })
+        });
+
+        Ok(())
     }
 
-    fn login(&self, client: &Client) -> Result<LoginResponse> {
+    #[allow(dead_code)]
+    async fn login(&self, client: &Client) -> Result<LoginResponse> {
         debug!("Logging in…");
         let response = client
             .post(Url::parse_with_params(
@@ -49,8 +49,10 @@ impl Tado {
                     ("password", &self.secrets.password),
                 ],
             )?)
-            .send()?
-            .json::<LoginResponse>()?;
+            .send()
+            .await?
+            .json::<LoginResponse>()
+            .await?;
         debug!("Logged in, token expires at: {:?}", response.expires_at);
         Ok(response)
     }

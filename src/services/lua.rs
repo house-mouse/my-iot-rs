@@ -35,41 +35,43 @@ pub struct Lua {
 }
 
 impl Lua {
-    pub fn spawn<'env>(
-        &'env self,
-        scope: &Scope<'env>,
-        service_id: &'env str,
-        bus: &mut Bus,
-        services: &'env HashMap<String, Service>,
-    ) -> Result<()> {
-        let tx = bus.add_tx();
-        let rx = bus.add_rx();
+    pub fn spawn(self, service_id: String, tx: Sender, services: &HashMap<String, Service>) -> Result<()> {
+        let mut rx = tx.subscribe();
+        let services = services.clone();
 
-        supervisor::spawn(scope, service_id, tx.clone(), move || -> Result<()> {
-            let lua = rlua::Lua::new();
-            lua.context(|context| -> Result<()> {
-                init_logging(context, &service_id)?;
-                init_functions(context, tx.clone())?;
-                init_services(context, &services)?;
+        let lua = rlua::Lua::new();
 
-                info!("[{}] Loading and executing script…", &service_id);
-                context.load(&self.script).set_name(&service_id)?.exec()?;
-                let on_message: LuaValue = context.globals().get("onMessage")?;
+        lua.context(|context| -> Result<()> {
+            init_logging(context, &service_id)?;
+            init_functions(context, tx)?;
+            init_services(context, &services)?;
 
-                info!("[{}] Listening…", &service_id);
-                for message in &rx {
-                    if self.is_match(&service_id, &message) {
-                        if let LuaValue::Function(on_message) = &on_message {
-                            on_message.call::<_, ()>(create_args_table(context, &message)?)?;
-                        } else {
-                            warn!("[{}] `onMessage` is not defined or not a function", &service_id);
-                        }
-                    }
+            info!("[{}] Loading and executing script…", &service_id);
+            context.load(&self.script).set_name(&service_id)?.exec()?;
+
+            Ok(())
+        })?;
+
+        tokio::task::spawn_blocking(move || {
+            info!("[{}] Listening…", &service_id);
+            loop {
+                let message = Message::receive_from(&mut rx).wait();
+                if !self.is_match(&service_id, &message) {
+                    continue;
                 }
+                if let Err(error) = lua.context(|context| -> Result<()> {
+                    context
+                        .globals()
+                        .get::<_, LuaFunction>("onMessage")?
+                        .call::<_, ()>(create_args_table(context, &message)?)?;
+                    Ok(())
+                }) {
+                    error!("[{}] Failed to handle the message: {}", service_id, error.to_string());
+                };
+            }
+        });
 
-                unreachable!()
-            })
-        })
+        Ok(())
     }
 
     /// Checks whether the message matches the filters.
@@ -123,7 +125,7 @@ fn create_log_function<S: Into<String>>(context: LuaContext, service_id: S, leve
 }
 
 /// Provides the custom functions to user code.
-fn init_functions(context: LuaContext, tx: Sender<Message>) -> Result<()> {
+fn init_functions(context: LuaContext, tx: Sender) -> Result<()> {
     let globals = context.globals();
     globals.set(
         "sendMessage",
@@ -133,7 +135,7 @@ fn init_functions(context: LuaContext, tx: Sender<Message>) -> Result<()> {
                 if let Some(args) = args {
                     enrich_message(&mut message, context, args)?;
                 }
-                message.send_and_forget(&tx);
+                message.send_to(&tx);
                 Ok(())
             },
         )?,

@@ -1,7 +1,6 @@
 use crate::core::message::Type;
 use crate::prelude::*;
 use spa::{calc_sunrise_and_set, SunriseAndSet};
-use std::thread;
 use std::time::Duration;
 use uom::si::f64::*;
 use uom::si::*;
@@ -34,63 +33,69 @@ fn default_interval_ms() -> u64 {
 }
 
 impl Solar {
-    pub fn spawn<'env>(&'env self, scope: &Scope<'env>, service_id: &'env str, bus: &mut Bus) -> Result<()> {
-        let tx = bus.add_tx();
+    pub fn spawn(self, service_id: String, tx: Sender) {
         let interval = Duration::from_millis(self.interval_ms);
 
-        supervisor::spawn(scope, service_id, tx.clone(), move || -> Result<()> {
+        tokio::spawn(async move {
             loop {
-                let now = Utc::now();
-                match calc_sunrise_and_set(now, self.secrets.latitude, self.secrets.longitude)? {
-                    SunriseAndSet::Daylight(sunrise, sunset) => {
-                        if now < sunrise {
-                            Message::new(format!("{}::before::sunrise", service_id))
-                                .type_(Type::ReadSnapshot)
-                                .sensor_title("Time Before Sunrise")
-                                .optional_room_title(self.room_title.clone())
-                                .value(Time::new::<time::millisecond>((sunrise - now).num_milliseconds() as f64))
-                                .send_and_forget(&tx);
-                        }
-                        if now < sunset {
-                            Message::new(format!("{}::before::sunset", service_id))
-                                .type_(Type::ReadSnapshot)
-                                .sensor_title("Time Before Sunset")
-                                .optional_room_title(self.room_title.clone())
-                                .value(Time::new::<time::millisecond>((sunset - now).num_milliseconds() as f64))
-                                .send_and_forget(&tx);
-                        }
-                        if sunrise < now {
-                            Message::new(format!("{}::after::sunrise", service_id))
-                                .type_(Type::ReadSnapshot)
-                                .sensor_title("Time After Sunrise")
-                                .optional_room_title(self.room_title.clone())
-                                .value(Time::new::<time::millisecond>((now - sunrise).num_milliseconds() as f64))
-                                .send_and_forget(&tx);
-                        }
-                        if sunset < now {
-                            Message::new(format!("{}::after::sunset", service_id))
-                                .type_(Type::ReadSnapshot)
-                                .sensor_title("Time After Sunset")
-                                .optional_room_title(self.room_title.clone())
-                                .value(Time::new::<time::millisecond>((now - sunset).num_milliseconds() as f64))
-                                .send_and_forget(&tx);
-                        }
-                    }
-                    SunriseAndSet::PolarDay => {
-                        Message::new(format!("{}::polar_day", service_id))
-                            .type_(Type::ReadNonLogged)
-                            .optional_room_title(self.room_title.clone())
-                            .send_and_forget(&tx);
-                    }
-                    SunriseAndSet::PolarNight => {
-                        Message::new(format!("{}::polar_night", service_id))
-                            .type_(Type::ReadNonLogged)
-                            .optional_room_title(self.room_title.clone())
-                            .send_and_forget(&tx);
-                    }
+                if let Err(error) = self.refresh(&service_id, &tx) {
+                    error!("[{}] Failed to refresh: {}", service_id, error.to_string());
                 }
-                thread::sleep(interval);
+                tokio::time::delay_for(interval).await;
             }
-        })
+        });
+    }
+
+    fn refresh(&self, service_id: &str, tx: &Sender) -> Result<()> {
+        let now = Utc::now();
+        match calc_sunrise_and_set(now, self.secrets.latitude, self.secrets.longitude)? {
+            SunriseAndSet::Daylight(sunrise, sunset) => {
+                if now < sunrise {
+                    Message::new(format!("{}::before::sunrise", service_id))
+                        .type_(Type::ReadSnapshot)
+                        .sensor_title("Time Before Sunrise")
+                        .optional_room_title(self.room_title.clone())
+                        .value(Time::new::<time::millisecond>((sunrise - now).num_milliseconds() as f64))
+                        .send_to(&tx);
+                }
+                if now < sunset {
+                    Message::new(format!("{}::before::sunset", service_id))
+                        .type_(Type::ReadSnapshot)
+                        .sensor_title("Time Before Sunset")
+                        .optional_room_title(self.room_title.clone())
+                        .value(Time::new::<time::millisecond>((sunset - now).num_milliseconds() as f64))
+                        .send_to(&tx);
+                }
+                if sunrise < now {
+                    Message::new(format!("{}::after::sunrise", service_id))
+                        .type_(Type::ReadSnapshot)
+                        .sensor_title("Time After Sunrise")
+                        .optional_room_title(self.room_title.clone())
+                        .value(Time::new::<time::millisecond>((now - sunrise).num_milliseconds() as f64))
+                        .send_to(&tx);
+                }
+                if sunset < now {
+                    Message::new(format!("{}::after::sunset", service_id))
+                        .type_(Type::ReadSnapshot)
+                        .sensor_title("Time After Sunset")
+                        .optional_room_title(self.room_title.clone())
+                        .value(Time::new::<time::millisecond>((now - sunset).num_milliseconds() as f64))
+                        .send_to(&tx);
+                }
+            }
+            SunriseAndSet::PolarDay => {
+                Message::new(format!("{}::polar_day", service_id))
+                    .type_(Type::ReadNonLogged)
+                    .optional_room_title(self.room_title.clone())
+                    .send_to(&tx);
+            }
+            SunriseAndSet::PolarNight => {
+                Message::new(format!("{}::polar_night", service_id))
+                    .type_(Type::ReadNonLogged)
+                    .optional_room_title(self.room_title.clone())
+                    .send_to(&tx);
+            }
+        }
+        Ok(())
     }
 }

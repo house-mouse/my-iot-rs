@@ -2,9 +2,10 @@
 
 ## `master`
 
+- **Switched from the threaded to asynchronous services**
 - Renamed Buienradar `wind_speed_bft` to `wind_force`
 - Added titles to supervisor sensors
-- Lower `default_max_sensor_age_ms` to 14 days
+- Lowered `default_max_sensor_age_ms` to 14 days
 - Added ambient temperature to the dashboard
 
 ## `0.47.0`

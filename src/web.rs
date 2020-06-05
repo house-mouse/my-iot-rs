@@ -17,7 +17,7 @@ struct MaxSensorAgeMs(i64);
 
 /// Start the web application.
 pub fn start_server(settings: &Settings, db: Arc<Mutex<Connection>>) -> Result<()> {
-    Err(Box::new(make_rocket(settings, db)?.launch()))
+    Err(make_rocket(settings, db)?.launch().into())
 }
 
 fn make_rocket(settings: &Settings, db: Arc<Mutex<Connection>>) -> Result<Rocket> {

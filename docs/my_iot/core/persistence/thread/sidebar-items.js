@@ -1,1 +1,1 @@
-initSidebarItems({"fn":[["process_message","Process a message."],["spawn","Spawn the persistence thread."]]});
+initSidebarItems({"fn":[["spawn","Spawn the persistence task."],["upsert_message",""]]});

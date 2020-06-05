@@ -2,12 +2,13 @@
 
 #![feature(proc_macro_hygiene, decl_macro)]
 
-use crate::core::supervisor;
 use crate::prelude::*;
 use log::Level;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use structopt::StructOpt;
+use tokio::runtime;
 
 mod core;
 mod errors;
@@ -56,18 +57,27 @@ fn main() -> Result<()> {
     info!("Opening the database…");
     let db = Arc::new(Mutex::new(Connection::open_and_initialize(&opt.db)?));
 
-    crossbeam::thread::scope(|scope| -> Result<()> {
-        info!("Starting services…");
-        let mut bus = Bus::new();
-        bus.add_tx()
-            .send(Message::new("my-iot::start").type_(MessageType::ReadNonLogged))?;
-        core::persistence::thread::spawn(scope, db.clone(), &mut bus)?;
-        services::db::Db.spawn(scope, "system::db", &mut bus, db.clone())?;
-        core::services::spawn_all(scope, &settings, &mut bus)?;
-        bus.spawn(scope)?;
+    info!("Starting services…");
+    {
+        let settings = settings.clone();
+        let db = db.clone();
+        thread::Builder::new().name("tokio".into()).spawn(move || {
+            runtime::Builder::new()
+                .basic_scheduler()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let (tx, rx) = tokio::sync::broadcast::channel(1024); // FIXME
+                    core::persistence::thread::spawn(db.clone(), rx);
+                    services::db::Db.spawn(db, tx.clone());
+                    core::services::spawn_all(&settings, tx.clone()).unwrap();
+                    Message::new("my-iot::start")
+                        .type_(MessageType::ReadNonLogged)
+                        .send_to(&tx);
+                });
+        })?;
+    }
 
-        info!("Starting web server on port {}…", settings.http_port);
-        web::start_server(&settings, db)
-    })
-    .unwrap()
+    info!("Starting web server on port {}…", settings.http_port);
+    web::start_server(&settings, db)
 }

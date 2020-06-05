@@ -2,10 +2,12 @@
 
 use crate::prelude::*;
 use crate::services::lua::prelude::*;
-use crate::services::telegram::{call_api, TelegramMessage};
+use crate::services::telegram::{TelegramChatId, TelegramMessage, TelegramResponse};
 use reqwest::blocking::Client;
 use rlua::prelude::*;
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value as JsonValue};
+use std::fmt::Debug;
 
 pub struct Telegram {
     token: String,
@@ -16,14 +18,23 @@ impl Telegram {
     pub fn new<T: Into<String>>(token: T) -> Result<Self> {
         Ok(Self {
             token: token.into(),
-            client: client_builder().build()?,
+            client: blocking_client_builder().build()?,
         })
     }
-}
 
-enum TelegramChatId {
-    UniqueId(i64),
-    Username(String),
+    fn call_api<P: Serialize + Debug + ?Sized, R: DeserializeOwned>(&self, method: &str, parameters: &P) -> Result<R> {
+        let response = self
+            .client
+            .get(&format!("https://api.telegram.org/bot{}/{}", self.token, method))
+            .json(parameters)
+            .send()?
+            .json::<TelegramResponse<R>>()?;
+        if response.ok {
+            Ok(response.result.unwrap())
+        } else {
+            Err(InternalError::new(response.description.unwrap()).into())
+        }
+    }
 }
 
 impl<'lua> FromLua<'lua> for TelegramChatId {
@@ -51,16 +62,15 @@ impl From<TelegramChatId> for JsonValue {
 impl UserData for Telegram {
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
         methods.add_method("sendMessage", |_, self_, (chat_id, text): (TelegramChatId, String)| {
-            call_api::<_, TelegramMessage>(
-                &self_.client,
-                &self_.token,
-                "sendMessage",
-                &json!({
-                    "chat_id": Into::<JsonValue>::into(chat_id),
-                    "text": &text,
-                }),
-            )
-            .map_err(|err| LuaError::RuntimeError(err.to_string()))?;
+            self_
+                .call_api::<_, TelegramMessage>(
+                    "sendMessage",
+                    &json!({
+                        "chat_id": Into::<JsonValue>::into(chat_id),
+                        "text": &text,
+                    }),
+                )
+                .map_err(|err| LuaError::RuntimeError(err.to_string()))?;
             Ok(())
         });
     }
